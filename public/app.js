@@ -49,31 +49,12 @@ const peerNames = new Map();
 const audioCards = new Map();
 const seenMessages = new Set();
 
-const joinSound = (() => {
-  try {
-    const audio = new Audio('audio/join.mp3');
-    audio.preload = 'auto';
-    audio.volume = 0.45;
-    audio.addEventListener(
-      'error',
-      () => {
-        audio.src =
-          'data:audio/wav;base64,UklGRkgAAABXQVZFZm10IBAAAAABAAEAESsAABErAAABAAgAZGF0YQAAAAAA';
-        audio.load();
-      },
-      { once: true },
-    );
-    return audio;
-  } catch (err) {
-    return null;
-  }
-})();
-
 let currentRoomCode = null;
 let displayName = '';
 let selfId = null;
 let localStream = null;
 let micEnabled = false;
+let audioContext = null;
 
 const supportsMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
@@ -271,6 +252,9 @@ function handleRoomEntered({ code, members = [] }) {
   messageInput.focus();
   updateMicUi();
   appendSystem(`Ты в комнате ${code}. Ожидаем подключения.`);
+  prepareLocalAudio().catch(() => {
+    appendSystem('Разреши доступ к микрофону, чтобы говорить голосом.');
+  });
 
   members.forEach(({ id, name }) => {
     peerNames.set(id, name || 'Участник');
@@ -283,7 +267,7 @@ function ensurePeer(peerId, peerName, initiator) {
   let peer = peers.get(peerId);
   if (peer) return peer;
 
-  const polite = !selfId || selfId.localeCompare(peerId) < 0;
+  const polite = !initiator;
   const pc = new RTCPeerConnection(RTC_CONFIGURATION);
   peer = {
     id: peerId,
@@ -442,7 +426,7 @@ function attachLocalAudio(peerId, peer) {
 
 async function enableMicrophone() {
   try {
-    await ensureLocalStream();
+    await prepareLocalAudio();
     micEnabled = true;
     localStream.getAudioTracks().forEach((track) => {
       track.enabled = true;
@@ -468,6 +452,10 @@ function disableMicrophone() {
 }
 
 async function ensureLocalStream() {
+  return prepareLocalAudio();
+}
+
+async function prepareLocalAudio() {
   if (localStream) return localStream;
   if (!supportsMedia) {
     throw new Error('media not supported');
@@ -688,30 +676,40 @@ function cleanupAndReload() {
 }
 
 function ensureAudioReady() {
-  if (!joinSound) return;
-  try {
-    const promise = joinSound.play();
-    if (promise?.catch) {
-      promise.catch(() => {});
-    }
-    joinSound.pause();
-    joinSound.currentTime = 0;
-  } catch (err) {
-    /* ignore */
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
   }
 }
 
 function playJoinSound() {
-  if (!joinSound) return;
-  try {
-    joinSound.currentTime = 0;
-    const promise = joinSound.play();
-    if (promise?.catch) {
-      promise.catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Join sound playback failed', err);
-  }
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  ensureAudioReady();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const now = ctx.currentTime;
+  osc.type = 'triangle';
+  osc.frequency.value = 880;
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.18, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.45);
+  osc.onended = () => {
+    osc.disconnect();
+    gain.disconnect();
+  };
+}
+
+function getAudioContext() {
+  if (audioContext) return audioContext;
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) return null;
+  audioContext = new Ctor();
+  return audioContext;
 }
 
 function generateMessageId() {
