@@ -47,6 +47,17 @@ const peers = new Map();
 const peerNames = new Map();
 const audioCards = new Map();
 const seenMessages = new Set();
+const joinSound = (() => {
+  try {
+    const audio = new Audio('audio/join.mp3');
+    audio.preload = 'auto';
+    audio.volume = 0.45;
+    audio.crossOrigin = 'anonymous';
+    return audio;
+  } catch (err) {
+    return null;
+  }
+})();
 
 let audioContext = null;
 let audioUnlockAttempted = false;
@@ -697,26 +708,15 @@ function getAudioContext() {
 }
 
 function playJoinSound() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
+  if (!joinSound) return;
   ensureAudioReady();
-  if (ctx.state === 'suspended') {
-    return;
+  try {
+    joinSound.currentTime = 0;
+    const promise = joinSound.play();
+    if (promise && typeof promise.catch === 'function') {
+      promise.catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Join sound playback failed', err);
   }
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'sine';
-  osc.frequency.value = 880;
-  const start = ctx.currentTime;
-  const duration = 0.25;
-  gain.gain.setValueAtTime(0, start);
-  gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(start);
-  osc.stop(start + duration + 0.05);
-  osc.onended = () => {
-    osc.disconnect();
-    gain.disconnect();
-  };
 }
