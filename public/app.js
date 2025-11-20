@@ -2,13 +2,13 @@
 
 const RTC_CONFIGURATION = {
   iceServers: [
-    { urls: 'stun:global.relay.metered.ca:80' },
+    { urls: 'stun:stun.relay.metered.ca:80' },
     {
       urls: [
-        'turn:global.relay.metered.ca:80',
-        'turn:global.relay.metered.ca:80?transport=tcp',
-        'turn:global.relay.metered.ca:443',
-        'turns:global.relay.metered.ca:443?transport=tcp',
+        'turn:eu-west.relay.metered.ca:80',
+        'turn:eu-west.relay.metered.ca:80?transport=tcp',
+        'turn:eu-west.relay.metered.ca:443',
+        'turns:eu-west.relay.metered.ca:443?transport=tcp',
       ],
       username: '9dc34ed2820c9b9e6bfb23d5',
       credential: 'McuUffqDox+b+Vk7',
