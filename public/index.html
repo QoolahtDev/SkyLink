@@ -69,6 +69,15 @@
       </header>
 
       <div class="chat-shell">
+        <section class="voice-panel">
+          <div>
+            <p class="muted">Голосовой канал</p>
+            <p class="voice-status" id="micStatus">Микрофон выключен</p>
+          </div>
+          <button class="secondary" type="button" id="toggleMicBtn">Включить микрофон</button>
+        </section>
+        <div class="audio-grid hidden" id="audioGrid"></div>
+
         <ul id="messages" class="messages" aria-live="polite"></ul>
         <form id="messageForm" class="message-form">
           <input type="text" id="messageInput" placeholder="Напиши сообщение..." autocomplete="off" maxlength="500" />
