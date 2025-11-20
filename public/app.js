@@ -2,22 +2,16 @@
 
 const RTC_CONFIGURATION = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:global.relay.metered.ca:80' },
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: [
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:80?transport=tcp',
+        'turn:global.relay.metered.ca:443',
+        'turns:global.relay.metered.ca:443?transport=tcp',
+      ],
+      username: '9dc34ed2820c9b9e6bfb23d5',
+      credential: 'McuUffqDox+b+Vk7',
     },
   ],
 };
@@ -54,6 +48,9 @@ const peerNames = new Map();
 const audioCards = new Map();
 const seenMessages = new Set();
 
+let audioContext = null;
+let audioUnlockAttempted = false;
+
 let currentRoomCode = null;
 let displayName = '';
 let selfId = null;
@@ -61,6 +58,21 @@ let localStream = null;
 let micEnabled = false;
 
 const supportsMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+document.addEventListener(
+  'pointerdown',
+  () => {
+    ensureAudioReady();
+  },
+  { once: true },
+);
+document.addEventListener(
+  'keydown',
+  () => {
+    ensureAudioReady();
+  },
+  { once: true },
+);
 
 messageInput.disabled = true;
 sendButton.disabled = true;
@@ -89,6 +101,7 @@ socket.on('user-joined', ({ id, name }) => {
   ensurePeer(id, cleanName, false);
   refreshAudioLabel(id);
   appendSystem(`${cleanName} подключился к комнате.`);
+  playJoinSound();
   updateParticipantCounter();
 });
 
@@ -252,6 +265,7 @@ function handleRoomEntered({ code, members = [] }) {
   messageInput.focus();
   appendSystem(`Ты в комнате ${code}. Ожидаем подключения.`);
   updateMicUi();
+  ensureAudioReady();
 
   members.forEach(({ id, name }) => {
     peerNames.set(id, name || 'Участник');
@@ -648,4 +662,46 @@ function registerMessageId(id) {
     seenMessages.clear();
   }
   return true;
+}
+
+function ensureAudioReady() {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  audioUnlockAttempted = true;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+}
+
+function getAudioContext() {
+  if (audioContext) return audioContext;
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) return null;
+  audioContext = new Ctor();
+  return audioContext;
+}
+
+function playJoinSound() {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  ensureAudioReady();
+  if (ctx.state === 'suspended') {
+    return;
+  }
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 880;
+  const start = ctx.currentTime;
+  const duration = 0.25;
+  gain.gain.setValueAtTime(0, start);
+  gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(start);
+  osc.stop(start + duration + 0.05);
+  osc.onended = () => {
+    osc.disconnect();
+    gain.disconnect();
+  };
 }
