@@ -433,7 +433,10 @@ function attachAudioToPeer(peerId, peer) {
   const [track] = localStream.getAudioTracks();
   if (!track) return;
   try {
-    peer.audioTransceiver.sender.replaceTrack(track);
+    const sender = peer.audioTransceiver.sender;
+    if (sender.track === track) return;
+    sender.replaceTrack(track);
+    createAndSendOffer(peerId, peer);
   } catch (err) {
     console.warn('Не удалось передать трек', err);
   }
