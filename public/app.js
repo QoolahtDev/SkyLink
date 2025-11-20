@@ -3,6 +3,7 @@
 const RTC_CONFIGURATION = {
   iceServers: [
     { urls: 'stun:stun.relay.metered.ca:80' },
+    { urls: 'stun:stun.l.google.com:19302' },
     {
       urls: [
         'turn:eu-west.relay.metered.ca:80',
