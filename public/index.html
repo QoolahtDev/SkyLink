@@ -1,0 +1,84 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SkyLink — приватные комнаты</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-lights" aria-hidden="true"></div>
+  <main class="viewport">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">SkyLink</p>
+        <h1>Мини‑дискорд на прямом подключении</h1>
+        <p class="lead">Создай приватную комнату с одноразовым кодом, подключай друзей и общайся напрямую через WebRTC.</p>
+      </div>
+      <div class="pill">⚡ Без серверных чатов — только прямой канал</div>
+    </header>
+
+    <section class="lobby" id="lobbyView">
+      <article class="card">
+        <h2>Создать комнату</h2>
+        <p class="muted">Придумай отображаемое имя и получи секретный код для приглашений.</p>
+        <form id="createRoomForm" class="form-grid">
+          <label class="field">
+            <span>Твоё имя</span>
+            <input type="text" id="createName" placeholder="Например, Неон" maxlength="32" required />
+          </label>
+          <button class="primary" type="submit">Сгенерировать комнату</button>
+        </form>
+        <div class="code-display hidden" id="roomCodeBox">
+          <span>Код комнаты:</span>
+          <strong id="roomCodeValue"></strong>
+          <button type="button" class="ghost" id="copyCodeBtn">Скопировать</button>
+        </div>
+      </article>
+      <article class="card">
+        <h2>Войти в комнату</h2>
+        <p class="muted">Если у тебя уже есть код, введи его и отправь запрос.</p>
+        <form id="joinRoomForm" class="form-grid">
+          <label class="field">
+            <span>Твоё имя</span>
+            <input type="text" id="joinName" placeholder="Например, Комета" maxlength="32" required />
+          </label>
+          <label class="field">
+            <span>Секретный код</span>
+            <input type="text" id="joinCode" placeholder="ABC123" maxlength="6" required />
+          </label>
+          <button class="secondary" type="submit">Подключиться</button>
+        </form>
+      </article>
+    </section>
+
+    <section class="room hidden" id="roomView">
+      <header class="room-header">
+        <div>
+          <p class="muted">Комната</p>
+          <h2 id="activeRoomCode">—</h2>
+          <p class="muted" id="participantCounter">Подключись, чтобы увидеть участников</p>
+        </div>
+        <div class="room-actions">
+          <div class="badge" id="selfDisplayName">—</div>
+          <button class="ghost" id="shareCodeBtn">Поделиться кодом</button>
+          <button class="danger" id="leaveRoomBtn">Выйти</button>
+        </div>
+      </header>
+
+      <div class="chat-shell">
+        <ul id="messages" class="messages" aria-live="polite"></ul>
+        <form id="messageForm" class="message-form">
+          <input type="text" id="messageInput" placeholder="Напиши сообщение..." autocomplete="off" maxlength="500" />
+          <button type="submit" class="primary">Отправить</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
