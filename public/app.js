@@ -48,20 +48,26 @@ const peers = new Map();
 const peerNames = new Map();
 const audioCards = new Map();
 const seenMessages = new Set();
+
 const joinSound = (() => {
   try {
     const audio = new Audio('audio/join.mp3');
     audio.preload = 'auto';
     audio.volume = 0.45;
-    audio.crossOrigin = 'anonymous';
+    audio.addEventListener(
+      'error',
+      () => {
+        audio.src =
+          'data:audio/wav;base64,UklGRkgAAABXQVZFZm10IBAAAAABAAEAESsAABErAAABAAgAZGF0YQAAAAAA';
+        audio.load();
+      },
+      { once: true },
+    );
     return audio;
   } catch (err) {
     return null;
   }
 })();
-
-let audioContext = null;
-let audioUnlockAttempted = false;
 
 let currentRoomCode = null;
 let displayName = '';
@@ -70,6 +76,16 @@ let localStream = null;
 let micEnabled = false;
 
 const supportsMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+messageInput.disabled = true;
+sendButton.disabled = true;
+shareCodeBtn.disabled = true;
+if (toggleMicBtn && !supportsMedia) {
+  toggleMicBtn.disabled = true;
+  micStatusLabel.textContent = 'Браузер не поддерживает звук';
+}
+
+audioGrid?.classList.add('hidden');
 
 document.addEventListener(
   'pointerdown',
@@ -86,16 +102,6 @@ document.addEventListener(
   { once: true },
 );
 
-messageInput.disabled = true;
-sendButton.disabled = true;
-shareCodeBtn.disabled = true;
-if (toggleMicBtn && !supportsMedia) {
-  toggleMicBtn.disabled = true;
-  micStatusLabel.textContent = 'Браузер не поддерживает звук';
-}
-
-audioGrid?.classList.add('hidden');
-
 socket.on('connect', () => {
   selfId = socket.id;
 });
@@ -108,11 +114,11 @@ socket.on('disconnect', () => {
 
 socket.on('user-joined', ({ id, name }) => {
   if (!currentRoomCode || !id) return;
-  const cleanName = name || 'Участник';
-  peerNames.set(id, cleanName);
-  ensurePeer(id, cleanName, false);
+  const clean = name || 'Участник';
+  peerNames.set(id, clean);
+  ensurePeer(id, clean, false);
   refreshAudioLabel(id);
-  appendSystem(`${cleanName} подключился к комнате.`);
+  appendSystem(`${clean} подключился к комнате.`);
   playJoinSound();
   updateParticipantCounter();
 });
@@ -128,28 +134,16 @@ socket.on('user-left', ({ id }) => {
 
 socket.on('webrtc-offer', async ({ from, sdp, name }) => {
   if (!from || !sdp) return;
-  const peerName = name || peerNames.get(from) || 'Участник';
-  peerNames.set(from, peerName);
-  const peer = ensurePeer(from, peerName, false);
-  try {
-    await peer.pc.setRemoteDescription(sdp);
-    const answer = await peer.pc.createAnswer();
-    await peer.pc.setLocalDescription(answer);
-    socket.emit('webrtc-answer', { targetId: from, sdp: peer.pc.localDescription });
-  } catch (err) {
-    console.error('Offer handling failed', err);
-  }
+  const peer = ensurePeer(from, name || peerNames.get(from) || 'Участник', false);
+  peerNames.set(from, peer.name);
+  await acceptRemoteDescription(peer, sdp);
 });
 
 socket.on('webrtc-answer', async ({ from, sdp }) => {
   if (!from || !sdp) return;
   const peer = peers.get(from);
   if (!peer) return;
-  try {
-    await peer.pc.setRemoteDescription(sdp);
-  } catch (err) {
-    console.error('Answer handling failed', err);
-  }
+  await acceptRemoteDescription(peer, sdp);
 });
 
 socket.on('webrtc-ice-candidate', async ({ from, candidate }) => {
@@ -239,18 +233,10 @@ shareCodeBtn?.addEventListener('click', () => {
   if (navigator.share) {
     navigator
       .share({ title: 'SkyLink комната', text })
-      .catch(() => copyToClipboard(text));
+      .catch(() => copyToClipboard(text, shareCodeBtn));
   } else {
     copyToClipboard(text, shareCodeBtn);
   }
-});
-
-leaveRoomBtn?.addEventListener('click', () => {
-  cleanupAndReload();
-});
-
-window.addEventListener('beforeunload', () => {
-  socket.disconnect();
 });
 
 toggleMicBtn?.addEventListener('click', async () => {
@@ -265,6 +251,14 @@ toggleMicBtn?.addEventListener('click', async () => {
   }
 });
 
+leaveRoomBtn?.addEventListener('click', () => {
+  cleanupAndReload();
+});
+
+window.addEventListener('beforeunload', () => {
+  socket.disconnect();
+});
+
 function handleRoomEntered({ code, members = [] }) {
   currentRoomCode = code;
   activeRoomCode.textContent = code;
@@ -275,36 +269,33 @@ function handleRoomEntered({ code, members = [] }) {
   messageInput.disabled = false;
   sendButton.disabled = false;
   messageInput.focus();
-  appendSystem(`Ты в комнате ${code}. Ожидаем подключения.`);
   updateMicUi();
-  ensureAudioReady();
+  appendSystem(`Ты в комнате ${code}. Ожидаем подключения.`);
 
   members.forEach(({ id, name }) => {
     peerNames.set(id, name || 'Участник');
-    initiatePeerConnection(id, name || 'Участник');
+    ensurePeer(id, name || 'Участник', true);
   });
   updateParticipantCounter();
 }
 
-function initiatePeerConnection(peerId, peerName) {
-  const peer = ensurePeer(peerId, peerName, true);
-  peerNames.set(peerId, peer.name);
-  createAndSendOffer(peerId, peer).catch((err) => console.error('Offer failed', err));
-}
-
 function ensurePeer(peerId, peerName, initiator) {
-  const existing = peers.get(peerId);
-  if (existing) return existing;
+  let peer = peers.get(peerId);
+  if (peer) return peer;
+
+  const polite = !selfId || selfId.localeCompare(peerId) < 0;
   const pc = new RTCPeerConnection(RTC_CONFIGURATION);
-  const peer = {
+  peer = {
     id: peerId,
     name: peerName || 'Участник',
+    polite,
     pc,
     channel: null,
-    connected: false,
+    localAudioSender: null,
     outbox: [],
-    audioTransceiver: null,
     makingOffer: false,
+    ignoreOffer: false,
+    isSettingRemoteAnswerPending: false,
   };
   peers.set(peerId, peer);
 
@@ -315,22 +306,21 @@ function ensurePeer(peerId, peerName, initiator) {
   };
 
   pc.oniceconnectionstatechange = () => {
-    if (['failed', 'disconnected', 'closed'].includes(pc.iceConnectionState)) {
+    if (['failed', 'closed', 'disconnected'].includes(pc.iceConnectionState)) {
       destroyPeer(peerId);
     }
   };
 
   pc.ontrack = (event) => {
-    if (!event.streams?.length) return;
-    handleRemoteTrack(peerId, event.streams[0]);
+    const [stream] = event.streams;
+    if (stream) {
+      handleRemoteTrack(peerId, stream);
+    }
   };
 
-  try {
-    peer.audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-  } catch (err) {
-    console.warn('Не удалось создать аудио-трансивер', err);
-    peer.audioTransceiver = null;
-  }
+  pc.onnegotiationneeded = async () => {
+    await handleNegotiationNeeded(peerId);
+  };
 
   if (initiator) {
     const channel = pc.createDataChannel('chat', { ordered: true });
@@ -341,11 +331,48 @@ function ensurePeer(peerId, peerName, initiator) {
     };
   }
 
-  if (micEnabled && localStream) {
-    attachAudioToPeer(peerId, peer);
+  if (localStream) {
+    attachLocalAudio(peerId, peer);
   }
 
   return peer;
+}
+
+async function handleNegotiationNeeded(peerId) {
+  const peer = peers.get(peerId);
+  if (!peer || peer.makingOffer) return;
+  try {
+    peer.makingOffer = true;
+    await peer.pc.setLocalDescription(await peer.pc.createOffer());
+    socket.emit('webrtc-offer', { targetId: peerId, sdp: peer.pc.localDescription });
+  } catch (err) {
+    console.error('Negotiation failed', err);
+  } finally {
+    peer.makingOffer = false;
+  }
+}
+
+async function acceptRemoteDescription(peer, descriptionLike) {
+  const description = descriptionLike.type
+    ? descriptionLike
+    : new RTCSessionDescription(descriptionLike);
+  const offerCollision =
+    description.type === 'offer' && (peer.makingOffer || peer.pc.signalingState !== 'stable');
+  peer.ignoreOffer = !peer.polite && offerCollision;
+  if (peer.ignoreOffer) {
+    console.warn('Offer ignored due to glare');
+    return;
+  }
+  try {
+    await peer.pc.setRemoteDescription(description);
+    if (description.type === 'offer') {
+      const answer = await peer.pc.createAnswer();
+      await peer.pc.setLocalDescription(answer);
+      socket.emit('webrtc-answer', { targetId: peer.id, sdp: peer.pc.localDescription });
+    }
+  } catch (err) {
+    console.error('SDP apply failed', err);
+  }
 }
 
 function wireDataChannel(peerId, channel) {
@@ -354,47 +381,23 @@ function wireDataChannel(peerId, channel) {
   peer.channel = channel;
 
   channel.onopen = () => {
-    peer.connected = true;
-    flushPeerQueue(peerId);
     appendSystem(`${peer.name} на связи.`);
+    flushPeerQueue(peerId);
     updateParticipantCounter();
   };
 
   channel.onclose = () => {
-    peer.connected = false;
     updateParticipantCounter();
   };
 
   channel.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload?.text) {
-        handleIncomingChat(
-          {
-            ...payload,
-            name: payload.name || peer.name || 'Участник',
-          },
-          peer.name || 'Участник',
-        );
-      }
+      handleIncomingChat(payload, peer.name);
     } catch (err) {
       console.warn('Не удалось разобрать сообщение', err);
     }
   };
-}
-
-function flushPeerQueue(peerId) {
-  const peer = peers.get(peerId);
-  if (!peer || !peer.channel || peer.channel.readyState !== 'open') return;
-  while (peer.outbox.length > 0) {
-    const payload = peer.outbox.shift();
-    try {
-      peer.channel.send(JSON.stringify(payload));
-    } catch (err) {
-      console.warn('Не удалось отправить сообщение', err);
-      break;
-    }
-  }
 }
 
 function broadcastPayload(payload) {
@@ -411,48 +414,40 @@ function broadcastPayload(payload) {
   });
 }
 
-function createAndSendOffer(peerId, peer) {
-  if (!peer || peer.makingOffer) return Promise.resolve();
-  peer.makingOffer = true;
-  return peer.pc
-    .createOffer()
-    .then((offer) => peer.pc.setLocalDescription(offer))
-    .then(() => {
-      socket.emit('webrtc-offer', { targetId: peerId, sdp: peer.pc.localDescription });
-    })
-    .catch((err) => {
-      console.error('Offer creation failed', err);
-    })
-    .finally(() => {
-      peer.makingOffer = false;
-    });
+function flushPeerQueue(peerId) {
+  const peer = peers.get(peerId);
+  if (!peer || !peer.channel || peer.channel.readyState !== 'open') return;
+  while (peer.outbox.length > 0) {
+    const payload = peer.outbox.shift();
+    try {
+      peer.channel.send(JSON.stringify(payload));
+    } catch (err) {
+      peer.outbox.unshift(payload);
+      break;
+    }
+  }
 }
 
-function attachAudioToPeer(peerId, peer) {
-  if (!peer || !peer.audioTransceiver) return;
-  if (!localStream || !micEnabled) return;
+function attachLocalAudio(peerId, peer) {
+  if (!localStream) return;
   const [track] = localStream.getAudioTracks();
   if (!track) return;
+  if (peer.localAudioSender && peer.localAudioSender.track === track) return;
   try {
-    const sender = peer.audioTransceiver.sender;
-    if (sender.track === track) return;
-    sender.replaceTrack(track);
-    createAndSendOffer(peerId, peer);
+    peer.localAudioSender = peer.pc.addTrack(track, localStream);
   } catch (err) {
-    console.warn('Не удалось передать трек', err);
+    console.warn('Не удалось добавить локальный трек', err);
   }
 }
 
 async function enableMicrophone() {
   try {
     await ensureLocalStream();
+    micEnabled = true;
     localStream.getAudioTracks().forEach((track) => {
       track.enabled = true;
     });
-    micEnabled = true;
-    peers.forEach((peer, peerId) => {
-      attachAudioToPeer(peerId, peer);
-    });
+    peers.forEach((peer, peerId) => attachLocalAudio(peerId, peer));
     appendSystem('Микрофон включен.');
     updateMicUi();
   } catch (err) {
@@ -481,6 +476,7 @@ async function ensureLocalStream() {
   localStream.getAudioTracks().forEach((track) => {
     track.enabled = micEnabled;
   });
+  peers.forEach((peer, peerId) => attachLocalAudio(peerId, peer));
   return localStream;
 }
 
@@ -494,18 +490,18 @@ function handleRemoteTrack(peerId, stream) {
   }
   card.audio.srcObject = stream;
   ensureAudioReady();
-  const playAudio = () => {
+  const attemptPlay = () => {
     const promise = card.audio.play();
-    if (promise && typeof promise.then === 'function') {
+    if (promise?.catch) {
       promise.catch(() => {});
     }
   };
   if (card.audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-    playAudio();
+    attemptPlay();
   } else {
     card.audio.onloadeddata = () => {
       card.audio.onloadeddata = null;
-      playAudio();
+      attemptPlay();
     };
   }
 }
@@ -546,21 +542,19 @@ function destroyPeer(peerId) {
   const peer = peers.get(peerId);
   if (!peer) return;
   if (peer.channel) {
+    try {
+      peer.channel.close();
+    } catch (err) {
+      console.warn('Channel close failed', err);
+    }
+    peer.channel.onopen = null;
     peer.channel.onclose = null;
     peer.channel.onmessage = null;
-    if (peer.channel.readyState !== 'closed') {
-      try {
-        peer.channel.close();
-      } catch (err) {
-        console.warn('Channel close failed', err);
-      }
-    }
   }
-  peer.pc.onicecandidate = null;
-  peer.pc.ondatachannel = null;
-  peer.pc.oniceconnectionstatechange = null;
-  peer.pc.ontrack = null;
   try {
+    peer.pc.onicecandidate = null;
+    peer.pc.ontrack = null;
+    peer.pc.ondatachannel = null;
     peer.pc.close();
   } catch (err) {
     console.warn('Peer close failed', err);
@@ -570,19 +564,13 @@ function destroyPeer(peerId) {
 }
 
 function handleIncomingChat(payload = {}, fallbackName = 'Участник') {
-  const text = typeof payload.text === 'string' ? payload.text : '';
-  const normalizedText = text.trim();
-  if (!normalizedText) return;
+  const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+  if (!text) return;
   const id = payload.id || generateMessageId();
   if (!registerMessageId(id)) return;
   const fromSelf = payload.senderId && selfId && payload.senderId === selfId;
   const author = fromSelf ? 'Ты' : payload.name || fallbackName || 'Участник';
-  appendMessage({
-    author,
-    text: normalizedText,
-    type: fromSelf ? 'me' : 'peer',
-    timestamp: payload.timestamp || Date.now(),
-  });
+  appendMessage({ author, text, type: fromSelf ? 'me' : 'peer', timestamp: payload.timestamp || Date.now() });
 }
 
 function appendMessage({ author, text, type = 'peer', timestamp = Date.now() }) {
@@ -699,6 +687,33 @@ function cleanupAndReload() {
   window.location.reload();
 }
 
+function ensureAudioReady() {
+  if (!joinSound) return;
+  try {
+    const promise = joinSound.play();
+    if (promise?.catch) {
+      promise.catch(() => {});
+    }
+    joinSound.pause();
+    joinSound.currentTime = 0;
+  } catch (err) {
+    /* ignore */
+  }
+}
+
+function playJoinSound() {
+  if (!joinSound) return;
+  try {
+    joinSound.currentTime = 0;
+    const promise = joinSound.play();
+    if (promise?.catch) {
+      promise.catch(() => {});
+    }
+  } catch (err) {
+    console.warn('Join sound playback failed', err);
+  }
+}
+
 function generateMessageId() {
   const random = Math.random().toString(36).slice(2, 8);
   return `${selfId || 'self'}-${Date.now()}-${random}`;
@@ -712,35 +727,4 @@ function registerMessageId(id) {
     seenMessages.clear();
   }
   return true;
-}
-
-function ensureAudioReady() {
-  const ctx = getAudioContext();
-  if (!ctx) return;
-  audioUnlockAttempted = true;
-  if (ctx.state === 'suspended') {
-    ctx.resume().catch(() => {});
-  }
-}
-
-function getAudioContext() {
-  if (audioContext) return audioContext;
-  const Ctor = window.AudioContext || window.webkitAudioContext;
-  if (!Ctor) return null;
-  audioContext = new Ctor();
-  return audioContext;
-}
-
-function playJoinSound() {
-  if (!joinSound) return;
-  ensureAudioReady();
-  try {
-    joinSound.currentTime = 0;
-    const promise = joinSound.play();
-    if (promise && typeof promise.catch === 'function') {
-      promise.catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Join sound playback failed', err);
-  }
 }
