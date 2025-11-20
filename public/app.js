@@ -4,6 +4,21 @@ const RTC_CONFIGURATION = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
 };
 
@@ -37,6 +52,7 @@ const sendButton = messageForm.querySelector('button');
 const peers = new Map();
 const peerNames = new Map();
 const audioCards = new Map();
+const seenMessages = new Set();
 
 let currentRoomCode = null;
 let displayName = '';
@@ -121,6 +137,10 @@ socket.on('webrtc-ice-candidate', async ({ from, candidate }) => {
   }
 });
 
+socket.on('relay-message', (payload = {}) => {
+  handleIncomingChat(payload);
+});
+
 createRoomForm?.addEventListener('submit', (event) => {
   event.preventDefault();
   if (currentRoomCode) return;
@@ -170,14 +190,17 @@ messageForm.addEventListener('submit', (event) => {
   const text = messageInput.value.trim();
   if (!text) return;
   const payload = {
+    id: generateMessageId(),
     text,
     name: displayName,
     senderId: selfId,
     timestamp: Date.now(),
   };
+  registerMessageId(payload.id);
   appendMessage({ author: 'Ты', text, type: 'me', timestamp: payload.timestamp });
   messageInput.value = '';
   broadcastPayload(payload);
+  socket.emit('relay-message', payload);
 });
 
 copyCodeBtn?.addEventListener('click', () => {
@@ -311,13 +334,14 @@ function wireDataChannel(peerId, channel) {
   channel.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload?.text && payload?.name) {
-        appendMessage({
-          author: payload.name,
-          text: payload.text,
-          type: 'peer',
-          timestamp: payload.timestamp || Date.now(),
-        });
+      if (payload?.text) {
+        handleIncomingChat(
+          {
+            ...payload,
+            name: payload.name || peer.name || 'Участник',
+          },
+          peer.name || 'Участник',
+        );
       }
     } catch (err) {
       console.warn('Не удалось разобрать сообщение', err);
@@ -481,6 +505,22 @@ function destroyPeer(peerId) {
   removeAudioCard(peerId);
 }
 
+function handleIncomingChat(payload = {}, fallbackName = 'Участник') {
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  const normalizedText = text.trim();
+  if (!normalizedText) return;
+  const id = payload.id || generateMessageId();
+  if (!registerMessageId(id)) return;
+  const fromSelf = payload.senderId && selfId && payload.senderId === selfId;
+  const author = fromSelf ? 'Ты' : payload.name || fallbackName || 'Участник';
+  appendMessage({
+    author,
+    text: normalizedText,
+    type: fromSelf ? 'me' : 'peer',
+    timestamp: payload.timestamp || Date.now(),
+  });
+}
+
 function appendMessage({ author, text, type = 'peer', timestamp = Date.now() }) {
   const item = document.createElement('li');
   item.className = `message ${type}`;
@@ -590,6 +630,22 @@ function cleanupAndReload() {
     localStream.getTracks().forEach((track) => track.stop());
     localStream = null;
   }
+  seenMessages.clear();
   socket.disconnect();
   window.location.reload();
+}
+
+function generateMessageId() {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${selfId || 'self'}-${Date.now()}-${random}`;
+}
+
+function registerMessageId(id) {
+  if (!id) return false;
+  if (seenMessages.has(id)) return false;
+  seenMessages.add(id);
+  if (seenMessages.size > 2000) {
+    seenMessages.clear();
+  }
+  return true;
 }

@@ -114,6 +114,21 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('relay-message', (payload = {}) => {
+    const { roomCode, displayName } = socket.data;
+    if (!roomCode) return;
+    const text = String(payload.text || '').trim().slice(0, 500);
+    if (!text) return;
+    const safePayload = {
+      id: payload.id || `${socket.id}-${Date.now()}`,
+      text,
+      timestamp: payload.timestamp || Date.now(),
+      senderId: socket.id,
+      name: displayName || payload.name || 'Гость',
+    };
+    socket.to(roomCode).emit('relay-message', safePayload);
+  });
+
   socket.on('disconnect', () => {
     removeSocketFromRoom(socket);
   });
