@@ -302,7 +302,8 @@ function ensurePeer(peerId, peerName, initiator) {
     channel: null,
     connected: false,
     outbox: [],
-    audioSenders: [],
+    audioTransceiver: null,
+    makingOffer: false,
   };
   peers.set(peerId, peer);
 
@@ -322,6 +323,13 @@ function ensurePeer(peerId, peerName, initiator) {
     if (!event.streams?.length) return;
     handleRemoteTrack(peerId, event.streams[0]);
   };
+
+  try {
+    peer.audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+  } catch (err) {
+    console.warn('Не удалось создать аудио-трансивер', err);
+    peer.audioTransceiver = null;
+  }
 
   if (initiator) {
     const channel = pc.createDataChannel('chat', { ordered: true });
@@ -403,20 +411,32 @@ function broadcastPayload(payload) {
 }
 
 function createAndSendOffer(peerId, peer) {
-  return (async () => {
-    const offer = await peer.pc.createOffer();
-    await peer.pc.setLocalDescription(offer);
-    socket.emit('webrtc-offer', { targetId: peerId, sdp: peer.pc.localDescription });
-  })();
+  if (!peer || peer.makingOffer) return Promise.resolve();
+  peer.makingOffer = true;
+  return peer.pc
+    .createOffer()
+    .then((offer) => peer.pc.setLocalDescription(offer))
+    .then(() => {
+      socket.emit('webrtc-offer', { targetId: peerId, sdp: peer.pc.localDescription });
+    })
+    .catch((err) => {
+      console.error('Offer creation failed', err);
+    })
+    .finally(() => {
+      peer.makingOffer = false;
+    });
 }
 
 function attachAudioToPeer(peerId, peer) {
-  if (!localStream || !peer) return;
-  if (peer.audioSenders.length) return;
-  localStream.getAudioTracks().forEach((track) => {
-    const sender = peer.pc.addTrack(track, localStream);
-    peer.audioSenders.push(sender);
-  });
+  if (!peer || !peer.audioTransceiver) return;
+  if (!localStream || !micEnabled) return;
+  const [track] = localStream.getAudioTracks();
+  if (!track) return;
+  try {
+    peer.audioTransceiver.sender.replaceTrack(track);
+  } catch (err) {
+    console.warn('Не удалось передать трек', err);
+  }
 }
 
 async function enableMicrophone() {
