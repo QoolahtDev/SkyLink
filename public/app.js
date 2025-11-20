@@ -458,6 +458,21 @@ function handleRemoteTrack(peerId, stream) {
     audioGrid.appendChild(card.wrapper);
   }
   card.audio.srcObject = stream;
+  ensureAudioReady();
+  const playAudio = () => {
+    const promise = card.audio.play();
+    if (promise && typeof promise.then === 'function') {
+      promise.catch(() => {});
+    }
+  };
+  if (card.audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    playAudio();
+  } else {
+    card.audio.onloadeddata = () => {
+      card.audio.onloadeddata = null;
+      playAudio();
+    };
+  }
 }
 
 function createAudioCard(peerId) {
